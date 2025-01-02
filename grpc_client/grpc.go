@@ -270,24 +270,30 @@ func (self *gRPCPool) getChannel(ctx context.Context) (*grpcpool.ClientConn, err
 
 // Figure out the correct API connection string from the config
 func GetAPIConnectionString(config_obj *config_proto.Config) string {
-    if config_obj.ApiConfig != nil && config_obj.ApiConfig.ApiConnectionString != "" {
-        return config_obj.ApiConfig.ApiConnectionString
-    }
+	if config_obj.ApiConfig != nil && config_obj.ApiConfig.ApiConnectionString != "" {
+		return config_obj.ApiConfig.ApiConnectionString
+	}
 
-    if config_obj.API == nil {
-        return ""
-    }
+	if config_obj.API == nil {
+		return ""
+	}
 
-    switch config_obj.API.BindScheme {
-    case "tcp":
-        hostname := "0.0.0.0"
-        return fmt.Sprintf("%s:%d", hostname, config_obj.API.BindPort)
+	switch config_obj.API.BindScheme {
+	case "tcp":
+		hostname := config_obj.API.Hostname
+		if config_obj.API.BindAddress == "127.0.0.1" {
+			hostname = config_obj.API.BindAddress
+		}
+		if hostname == "" {
+			hostname = config_obj.API.BindAddress
+		}
+		return fmt.Sprintf("%s:%d", hostname, config_obj.API.BindPort)
 
-    case "unix":
-        return fmt.Sprintf("unix://%s", config_obj.API.BindAddress)
-    }
+	case "unix":
+		return fmt.Sprintf("unix://%s", config_obj.API.BindAddress)
+	}
 
-    panic("Unknown API.BindScheme")
+	panic("Unknown API.BindScheme")
 }
 
 // Make sure the pool is established and running.
