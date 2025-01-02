@@ -1,16 +1,14 @@
-name: Linux Build All Arches
+name: Build All Arches
 on:
   push:
     branches:
-      - master
-
+      - main
 
 jobs:
-  build:
-    name: Build
+  build-linux:
+    name: Build Linux
     runs-on: ubuntu-20.04
     steps:
-
     - name: Check out code into the Go module directory
       uses: actions/checkout@v4
 
@@ -34,10 +32,10 @@ jobs:
 
     - name: npm install gui
       run: |
-            cd gui/velociraptor/
-            npm install
-            npm run build
-            cd ../../
+        cd gui/velociraptor/
+        npm install
+        npm run build
+        cd ../../
 
     - name: Build All Architectures
       run: |
@@ -47,8 +45,86 @@ jobs:
         go run make.go -v Linux
         go run make.go -v Windows
 
-    - name: StoreBinaries
+    - name: Store Binaries
       uses: actions/upload-artifact@v4
       with:
         name: Binaries
         path: output
+
+  build-windows:
+    name: Windows Test
+    runs-on: windows-2019
+    steps:
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@v4
+
+    - name: Set up Go 1.23
+      uses: actions/setup-go@v4
+      with:
+        go-version: 1.23
+        cache: false
+      id: go
+
+    - name: Configure test environment
+      shell: cmd
+      if: always()
+      run: |
+        echo %PATH%
+        echo %GOPATH%
+        subst X: %CD%
+        mklink c:\Users\link c:\Windows
+        mkdir "C:\Program Files\Velociraptor"
+        mkdir c:\tmp
+        mkdir c:\adstest\test
+        echo "This is a test of a folder ADS! Its resident too!" > c:\adstest\test:test.txt
+        echo Hello > C:\hello.txt
+        echo HelloADS > C:\hello.txt:myads
+        fsutil file setshortname C:\hello.txt hi.txt
+        wevtutil.exe cl System
+        sc.exe create TestingDetection1 binPath="%COMSPEC% /Q /c echo 'COMSPEC testing 1"
+        echo "VSStest" > c:\Users\test.txt
+        echo "VSStest2" > c:\Users\test2.txt
+        regedit /S artifacts/testdata/windows/init.reg
+
+    - name: Build
+      if: always()
+      env:
+        CC: x86_64-w64-mingw32-gcc
+      shell: bash
+      run: |
+        go run make.go -v WindowsTest
+
+    - name: Prepare second stage
+      if: success()
+      shell: cmd
+      run: |
+        vssadmin create shadow /for=c:
+        echo "VSStest2 with more data" > c:\Users\test2.txt
+        echo Clearing the event logs
+        wevtutil.exe cl System
+        wevtutil.exe cl security
+        echo Create second service.
+        sc.exe create TestingDetection2 binPath="%COMSPEC% /Q /c echo 'COMSPEC testing 2"
+
+    - name: Test
+      shell: bash
+      if: always()
+      env:
+        CGO_ENABLED: "0"
+      run: |
+        go test -short -v ./... --tags server_vql -p 2
+
+    - name: Test Golden Generic
+      shell: cmd
+      if: success()
+      run: |
+        vssadmin create shadow /for=c:
+        echo Running OS generic tests.
+        output\velociraptor.exe -v golden X:\artifacts\testdata\server\testcases\ --env srcDir=X:\ --config X:\artifacts\testdata\windows\github_actions.config.yaml
+
+    - name: Test Golden Windows
+      shell: cmd
+      if: success()
+      run: |
+        echo Running windows specific tests.
+        output\velociraptor.exe -v golden X:\artifacts\testdata\windows\ --env srcDir=X:\ --config X:\artifacts\testdata\windows\github_actions.config.yaml
