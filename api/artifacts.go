@@ -1,6 +1,6 @@
 /*
 Velociraptor - Dig Deeper
-Copyright (C) 2019-2024 Rapid7 Inc.
+Copyright (C) 2019-2025 Rapid7 Inc.
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as published
@@ -19,13 +19,13 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"io/ioutil"
 	"regexp"
 	"strings"
 
 	"github.com/Velocidex/ordereddict"
 	errors "github.com/go-errors/errors"
-	context "golang.org/x/net/context"
 	"www.velocidex.com/golang/velociraptor/acls"
 	actions_proto "www.velocidex.com/golang/velociraptor/actions/proto"
 	api_proto "www.velocidex.com/golang/velociraptor/api/proto"
@@ -518,6 +518,8 @@ func (self *ApiServer) LoadArtifactPack(
 	ctx context.Context,
 	in *api_proto.LoadArtifactPackRequest) (
 	*api_proto.LoadArtifactPackResponse, error) {
+
+	defer Instrument("LoadArtifactPack")()
 
 	users_manager := services.GetUserManager()
 	user_record, org_config_obj, err := users_manager.GetUserFromContext(ctx)

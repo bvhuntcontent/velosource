@@ -3,6 +3,7 @@ package evaluator
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/Velocidex/ordereddict"
 	"github.com/Velocidex/sigma-go"
@@ -24,6 +25,8 @@ type Result struct {
 }
 
 type VQLRuleEvaluator struct {
+	hit_count uint64
+
 	sigma.Rule
 	scope types.Scope
 
@@ -32,22 +35,46 @@ type VQLRuleEvaluator struct {
 	lambda      *vfilter.Lambda
 	lambda_args *ordereddict.Dict
 
-	fieldmappings []FieldMappingRecord
+	// Rule may specify an enrichment lambda - this is applied after
+	// matching and just adds additional information for reporting.
+	enrichment *vfilter.Lambda
+
+	fieldmappings *FieldMappingResolver
 
 	// If this rule has a correlator, then forward the match to the
 	// correlator.
 	Correlator *SigmaCorrelator `json:"correlator,omitempty" yaml:"correlator,omitempty"`
 }
 
-type FieldMappingRecord struct {
-	Name   string
-	Lambda *vfilter.Lambda
+func (self *VQLRuleEvaluator) GetCorrelatorRule() *VQLRuleEvaluator {
+	if self.Correlator == nil {
+		return self
+	}
+
+	res := &VQLRuleEvaluator{
+		Rule:          self.Correlator.Rule,
+		fieldmappings: self.fieldmappings,
+		scope:         self.scope,
+	}
+
+	err := res.CheckRule()
+	if err != nil {
+		return self
+	}
+
+	return res
+}
+
+func (self *VQLRuleEvaluator) Stats(in *ordereddict.Dict) *ordereddict.Dict {
+	hit_count := atomic.LoadUint64(&self.hit_count)
+
+	return in.Set("RuleTitle", self.Rule.Title).Set("Hits", hit_count)
 }
 
 func NewVQLRuleEvaluator(
 	scope types.Scope,
 	rule sigma.Rule,
-	fieldmappings []FieldMappingRecord) *VQLRuleEvaluator {
+	fieldmappings *FieldMappingResolver) *VQLRuleEvaluator {
 	result := &VQLRuleEvaluator{
 		scope:         scope,
 		Rule:          rule,
@@ -61,6 +88,28 @@ func (self *VQLRuleEvaluator) evaluateAggregationExpression(
 	ctx context.Context, conditionIndex int,
 	aggregation sigma.AggregationExpr, event *Event) (bool, error) {
 	return false, nil
+}
+
+// A rule may specify an enrichment lambda. This is filled **after**
+// the rule matches and just adds additional information for
+// reporting.
+
+// This is an optimization - additional fields are only calculated for
+// matching rules instead of every field.
+func (self *VQLRuleEvaluator) MaybeEnrichForReporting(
+	ctx context.Context, scope types.Scope, event *Event) *Event {
+	// No enrichment - pass through
+	if self.enrichment == nil {
+		return event
+	}
+
+	subscope := scope.Copy().AppendVars(self.lambda_args)
+	defer subscope.Close()
+
+	// Update the row now so the details can refer to enriched fields.
+	enrichment := self.enrichment.Reduce(ctx, subscope, []vfilter.Any{event.Copy()})
+
+	return NewEvent(event.Set("Enrichment", enrichment))
 }
 
 func (self *VQLRuleEvaluator) MaybeEnrichWithVQL(
@@ -87,12 +136,6 @@ func (self *VQLRuleEvaluator) MaybeEnrichWithVQL(
 func (self *VQLRuleEvaluator) Match(ctx context.Context,
 	scope types.Scope, event *Event) (*Result, error) {
 
-	subscope := scope.Copy().AppendVars(
-		ordereddict.NewDict().
-			Set("Event", event).
-			Set("Rule", self.Rule))
-	defer subscope.Close()
-
 	result := Result{
 		Match:            false,
 		SearchResults:    map[string]bool{},
@@ -104,7 +147,7 @@ func (self *VQLRuleEvaluator) Match(ctx context.Context,
 	for identifier, search := range self.Detection.Searches {
 		var err error
 
-		eval_result, err := self.evaluateSearch(ctx, subscope, search, event)
+		eval_result, err := self.evaluateSearch(ctx, scope, search, event)
 		if err != nil {
 			return nil, fmt.Errorf("error evaluating search %s: %w", identifier, err)
 		}
@@ -143,7 +186,17 @@ func (self *VQLRuleEvaluator) Match(ctx context.Context,
 	// If we get here the base rule would have matched - if there is a
 	// correlator tell it about it.
 	if result.Match && self.Correlator != nil {
+		// Tag the event with the rule that actually matched it. This
+		// makes it easy to see which rule from the correlation
+		// matched each event.
+		event.Set("_MatchingRule", self.Rule.Title)
+
 		return self.Correlator.Match(ctx, scope, self, event)
+	}
+
+	// Record the total hits
+	if result.Match {
+		atomic.AddUint64(&self.hit_count, 1)
 	}
 
 	return &result, nil

@@ -1,9 +1,13 @@
-//go:build windows && cgo
-// +build windows,cgo
+//go:build windows && cgo && amd64
+// +build windows,cgo,amd64
 
 package etw
 
-import "time"
+import (
+	"time"
+
+	"github.com/Velocidex/ordereddict"
+)
 
 type ProviderStat struct {
 	SessionName string
@@ -12,4 +16,5 @@ type ProviderStat struct {
 	EventCount  int
 	Watchers    int
 	Started     time.Time
+	Stats       *ordereddict.Dict
 }

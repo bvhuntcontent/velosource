@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/Velocidex/ordereddict"
-	"github.com/alitto/pond"
+	"github.com/alitto/pond/v2"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
 	"www.velocidex.com/golang/velociraptor/datastore"
 	"www.velocidex.com/golang/velociraptor/file_store"
@@ -27,7 +27,8 @@ func (self *FlowStorageManager) DeleteFlow(
 	ctx context.Context,
 	config_obj *config_proto.Config,
 	client_id string, flow_id string, principal string,
-	really_do_it bool) ([]*services.DeleteFlowResponse, error) {
+	options services.DeleteFlowOptions) (
+	[]*services.DeleteFlowResponse, error) {
 
 	launcher, err := services.GetLauncher(config_obj)
 	if err != nil {
@@ -46,7 +47,7 @@ func (self *FlowStorageManager) DeleteFlow(
 		return nil, nil
 	}
 
-	if really_do_it && principal != "" {
+	if options.ReallyDoIt && principal != "" {
 		services.LogAudit(ctx,
 			config_obj, principal, "delete_flow",
 			ordereddict.NewDict().
@@ -60,11 +61,11 @@ func (self *FlowStorageManager) DeleteFlow(
 	upload_metadata_path := flow_path_manager.UploadMetadata()
 
 	r := &reporter{
-		really_do_it: really_do_it,
+		really_do_it: options.ReallyDoIt,
 		ctx:          ctx,
 		config_obj:   config_obj,
 		seen:         make(map[string]bool),
-		pool:         pond.New(100, 1000),
+		pool:         pond.NewPool(100),
 	}
 	file_store_factory := file_store.GetFileStore(config_obj)
 	reader, err := result_sets.NewResultSetReader(
@@ -151,11 +152,19 @@ func (self *FlowStorageManager) DeleteFlow(
 			r.emit_fs("NotebookItem", path)
 			return nil
 		})
-	// Rebuild the flow index to ensure GUI paging works
-	// properly. This is pretty slow but we do not expect to delete
-	// flows that often.
-	if really_do_it {
-		err = self.buildFlowIndexFromLegacy(ctx, config_obj, client_id)
+
+	if options.ReallyDoIt {
+		// User specified the flow must be removed immediately.
+		if options.Sync {
+			err = self.RemoveClientFlowsFromIndex(
+				ctx, config_obj, client_id, map[string]bool{
+					flow_id: true,
+				})
+		} else {
+			// Otherwise we just mark the index as pending a rebuild
+			// and move on.
+			self.writeFlowJournal(config_obj, client_id, flow_id)
+		}
 	}
 	r.pool.StopAndWait()
 
@@ -175,7 +184,7 @@ type reporter struct {
 	really_do_it bool
 	mu           sync.Mutex
 	id           int
-	pool         *pond.WorkerPool
+	pool         pond.Pool
 }
 
 func (self *reporter) emit_ds(
@@ -268,7 +277,8 @@ func (self *Launcher) DeleteEvents(
 	config_obj *config_proto.Config,
 	principal, artifact, client_id string,
 	start_time, end_time time.Time,
-	really_do_it bool) ([]*services.DeleteFlowResponse, error) {
+	options services.DeleteFlowOptions) (
+	[]*services.DeleteFlowResponse, error) {
 
 	path_manager, err := artifacts.NewArtifactPathManager(ctx,
 		config_obj, client_id, "", artifact)
@@ -287,7 +297,7 @@ func (self *Launcher) DeleteEvents(
 			f.StartTime.Before(end_time) {
 			var error_message string
 
-			if really_do_it {
+			if options.ReallyDoIt {
 				err := file_store_factory.Delete(f.Path)
 				if err != nil {
 					error_message = fmt.Sprintf(
@@ -323,7 +333,7 @@ func (self *Launcher) DeleteEvents(
 			f.StartTime.Before(end_time) {
 			var error_message string
 
-			if really_do_it {
+			if options.ReallyDoIt {
 				err := file_store_factory.Delete(f.Path)
 				if err != nil {
 					error_message = fmt.Sprintf(
@@ -350,7 +360,7 @@ func (self *Launcher) DeleteEvents(
 	}
 
 	// Log into the audit log
-	if really_do_it {
+	if options.ReallyDoIt {
 		return result, services.LogAudit(ctx, config_obj, principal, "DeleteEvents",
 			ordereddict.NewDict().
 				Set("artifact", artifact).

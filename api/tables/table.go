@@ -1,6 +1,6 @@
 /*
 Velociraptor - Dig Deeper
-Copyright (C) 2019-2024 Rapid7 Inc.
+Copyright (C) 2019-2025 Rapid7 Inc.
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as published
@@ -18,6 +18,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 package tables
 
 import (
+	"context"
 	"io"
 	"regexp"
 	"strings"
@@ -25,7 +26,6 @@ import (
 
 	"github.com/Velocidex/ordereddict"
 	errors "github.com/go-errors/errors"
-	context "golang.org/x/net/context"
 	file_store "www.velocidex.com/golang/velociraptor/file_store"
 	"www.velocidex.com/golang/velociraptor/file_store/api"
 	"www.velocidex.com/golang/velociraptor/file_store/path_specs"
@@ -423,9 +423,8 @@ func getEventTableWithPathManager(
 
 	result := &api_proto.GetTableResponse{}
 
-	file_store_factory := file_store.GetFileStore(config_obj)
 	rs_reader, err := result_sets.NewTimedResultSetReader(ctx,
-		file_store_factory, path_manager)
+		config_obj, path_manager)
 	if err != nil {
 		return nil, err
 	}

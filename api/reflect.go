@@ -1,6 +1,6 @@
 /*
 Velociraptor - Dig Deeper
-Copyright (C) 2019-2024 Rapid7 Inc.
+Copyright (C) 2019-2025 Rapid7 Inc.
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as published
@@ -18,10 +18,10 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 package api
 
 import (
+	"context"
 	"regexp"
 	"strings"
 
-	context "golang.org/x/net/context"
 	"google.golang.org/protobuf/types/known/emptypb"
 	api_proto "www.velocidex.com/golang/velociraptor/api/proto"
 	artifacts_proto "www.velocidex.com/golang/velociraptor/artifacts/proto"
@@ -87,6 +87,8 @@ func IntrospectDescription() []*api_proto.Completion {
 func (self *ApiServer) GetKeywordCompletions(
 	ctx context.Context,
 	in *emptypb.Empty) (*api_proto.KeywordCompletions, error) {
+
+	defer Instrument("GetKeywordCompletions")()
 
 	users := services.GetUserManager()
 	_, org_config_obj, err := users.GetUserFromContext(ctx)

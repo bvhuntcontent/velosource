@@ -21,6 +21,7 @@ package responder
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/Velocidex/ordereddict"
@@ -28,6 +29,7 @@ import (
 	constants "www.velocidex.com/golang/velociraptor/constants"
 	crypto_proto "www.velocidex.com/golang/velociraptor/crypto/proto"
 	"www.velocidex.com/golang/velociraptor/services/debug"
+	"www.velocidex.com/golang/velociraptor/third_party/cache"
 	"www.velocidex.com/golang/velociraptor/utils"
 	"www.velocidex.com/golang/vfilter"
 )
@@ -44,7 +46,10 @@ type FlowManager struct {
 	ctx        context.Context
 	config_obj *config_proto.Config
 	in_flight  map[string]*FlowContext
-	next_id    int
+
+	// These are old flows that are completed.
+	finished *cache.LRUCache
+	next_id  int
 
 	// Remember all the cancelled sessions so the ring buffer file can
 	// drop any messages for flows that were already cancelled.
@@ -52,20 +57,23 @@ type FlowManager struct {
 }
 
 func NewFlowManager(ctx context.Context,
-	config_obj *config_proto.Config) *FlowManager {
+	config_obj *config_proto.Config, client_id string) *FlowManager {
 
 	result := &FlowManager{
 		ctx:        ctx,
 		id:         utils.GetId(),
 		config_obj: config_obj,
 		in_flight:  make(map[string]*FlowContext),
+		finished:   cache.NewLRUCache(20),
 		cancelled:  make(map[string]bool),
 	}
 
 	debug.RegisterProfileWriter(debug.ProfileWriterInfo{
-		Name:          "ClientFlowManager",
-		Description:   "Report the state of the client's flow manager",
+		Name: "ClientFlowManager",
+		Description: fmt.Sprintf(
+			"Report the state of the client's flow manager (%v)", client_id),
 		ProfileWriter: result.WriteProfile,
+		Categories:    []string{"Client"},
 	})
 
 	return result
@@ -73,27 +81,65 @@ func NewFlowManager(ctx context.Context,
 
 func (self *FlowManager) WriteProfile(ctx context.Context,
 	scope vfilter.Scope, output_chan chan vfilter.Row) {
-	self.mu.Lock()
-	defer self.mu.Unlock()
 
+	var results []*ordereddict.Dict
+
+	self.mu.Lock()
 	for flow_id, flow_context := range self.in_flight {
-		output_chan <- ordereddict.NewDict().
+		results = append(results, ordereddict.NewDict().
 			Set("FlowId", flow_id).
 			Set("State", "In Flight").
-			Set("Stats", flow_context.GetStats())
+			Set("Stats", flow_context.GetStatsDicts()))
+	}
+
+	for _, flow_id := range self.finished.Keys() {
+		flow_context_any, pres := self.finished.Peek(flow_id)
+		if !pres {
+			continue
+		}
+
+		flow_context, ok := flow_context_any.(*FlowContext)
+		if !ok {
+			continue
+		}
+
+		results = append(results, ordereddict.NewDict().
+			Set("FlowId", flow_id).
+			Set("State", "Completed").
+			Set("Stats", flow_context.GetStatsDicts()))
 	}
 
 	for flow_id := range self.cancelled {
-		output_chan <- ordereddict.NewDict().
+		results = append(results, ordereddict.NewDict().
 			Set("FlowId", flow_id).
-			Set("State", "Cancelled")
+			Set("State", "Cancelled"))
+	}
+	defer self.mu.Unlock()
+
+	for _, r := range results {
+		select {
+		case <-ctx.Done():
+			return
+		case output_chan <- r:
+		}
 	}
 }
 
-func (self *FlowManager) removeFlowContext(flow_id string) {
+func (self *FlowManager) RemoveFlowContext(flow_id string) {
 	self.mu.Lock()
+
+	flow_context, pres := self.in_flight[flow_id]
+	if !pres {
+		self.mu.Unlock()
+		return
+	}
+
 	delete(self.in_flight, flow_id)
+
 	self.mu.Unlock()
+
+	// Append the flow to the completed list.
+	self.finished.Set(flow_id, flow_context)
 }
 
 func (self *FlowManager) IsCancelled(flow_id string) bool {
@@ -121,6 +167,7 @@ func (self *FlowManager) Cancel(ctx context.Context, flow_id string) {
 	// ignore the cancel request.
 	flow_context, pres := self.in_flight[flow_id]
 	self.mu.Unlock()
+
 	if pres {
 		flow_context.Cancel()
 	}
@@ -128,10 +175,18 @@ func (self *FlowManager) Cancel(ctx context.Context, flow_id string) {
 
 func (self *FlowManager) Get(flow_id string) (*FlowContext, error) {
 	self.mu.Lock()
-	defer self.mu.Unlock()
-
 	flow_context, pres := self.in_flight[flow_id]
+	self.mu.Unlock()
+
 	if !pres {
+		// Flow is not in flight - maybe it is finished?
+		flow_context_any, pres := self.finished.Get(flow_id)
+		if pres {
+			flow_context, ok := flow_context_any.(*FlowContext)
+			if ok {
+				return flow_context, nil
+			}
+		}
 		return nil, utils.NotFoundError
 	}
 

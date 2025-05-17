@@ -3,7 +3,7 @@
 
 /*
    Velociraptor - Dig Deeper
-   Copyright (C) 2019-2024 Rapid7 Inc.
+   Copyright (C) 2019-2025 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -312,14 +312,13 @@ func (self *RegValueInfo) materialize() error {
 		self.Type = "BINARY"
 
 	case registry.MULTI_SZ:
-		value_str, _ := value.(string)
-		self._binary_data = []byte(value_str)
+		self._binary_data, _ = json.Marshal(value)
 		self.Type = "MULTI_SZ"
 
 		if buf_size < MAX_EMBEDDED_REG_VALUE {
 			self._data = ordereddict.NewDict().
 				Set("type", "MULTI_SZ").
-				Set("value", strings.Split(value_str, "\n"))
+				Set("value", value)
 		}
 
 	case registry.SZ, registry.EXPAND_SZ:

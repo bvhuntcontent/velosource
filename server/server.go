@@ -1,6 +1,6 @@
 /*
    Velociraptor - Dig Deeper
-   Copyright (C) 2019-2024 Rapid7 Inc.
+   Copyright (C) 2019-2025 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -34,6 +34,7 @@ import (
 	"www.velocidex.com/golang/velociraptor/crypto"
 	crypto_proto "www.velocidex.com/golang/velociraptor/crypto/proto"
 	crypto_server "www.velocidex.com/golang/velociraptor/crypto/server"
+	"www.velocidex.com/golang/velociraptor/datastore"
 	"www.velocidex.com/golang/velociraptor/flows"
 	"www.velocidex.com/golang/velociraptor/logging"
 	"www.velocidex.com/golang/velociraptor/services"
@@ -46,6 +47,8 @@ const (
 )
 
 type Server struct {
+	Healthy int32
+
 	manager *crypto_server.ServerCryptoManager
 	logger  *logging.LogContext
 
@@ -59,8 +62,7 @@ type Server struct {
 	// The server dynamically adjusts concurrency. This signals exit.
 	done chan bool
 
-	Bucket  *ratelimit.Bucket
-	Healthy int32
+	Bucket *ratelimit.Bucket
 }
 
 func (self *Server) Concurrency() *utils.Concurrency {
@@ -222,6 +224,18 @@ func (self *Server) Process(
 	}
 
 	config_obj, err := org_manager.GetOrgConfig(message_info.OrgId)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	db, err := datastore.GetDB(config_obj)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// If the datastore is not healthy refuse to accept this
+	// connection.
+	err = db.Healthy()
 	if err != nil {
 		return nil, 0, err
 	}

@@ -98,16 +98,13 @@ func (self RawS3SystemAccessor) ReadDirWithOSPath(
 		return nil, err
 	}
 
-	// Keys may not have a leading / but we should handle them as
-	// well.
-	key = strings.TrimPrefix(key, "/")
 	bucket_path := accessors.MustNewLinuxOSPath(bucket)
 	child_directories := ordereddict.NewDict()
 	child_files := []*S3FileInfo{}
 
 	params := &s3.ListObjectsV2Input{
 		Bucket: aws.String(bucket),
-		Prefix: aws.String(path.Dirname().String()),
+		Prefix: aws.String(key),
 	}
 
 	// Create the Paginator for the ListObjectsV2 operation.
@@ -173,7 +170,7 @@ func getBucketAndKey(path *accessors.OSPath) (string, string, error) {
 
 	bucket := path.Components[0]
 	components := append([]string{}, path.Components[1:]...)
-	key := "/" + strings.Join(components, "/")
+	key := strings.Join(components, "/")
 
 	return bucket, key, nil
 }
@@ -202,7 +199,7 @@ func (self RawS3SystemAccessor) OpenWithOSPath(
 	// small reads from the network.
 	paged_reader, err := utils.NewPagedReader(
 		utils.MakeReaderAtter(reader), 1024*1024, 20)
-	return utils.NewReadSeekReaderAdapter(paged_reader), err
+	return utils.NewReadSeekReaderAdapter(paged_reader, nil), err
 }
 
 func (self RawS3SystemAccessor) Open(

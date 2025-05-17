@@ -1,6 +1,6 @@
 /*
 Velociraptor - Dig Deeper
-Copyright (C) 2019-2024 Rapid7 Inc.
+Copyright (C) 2019-2025 Rapid7 Inc.
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as published
@@ -37,10 +37,10 @@ func (self *GetPidFunction) Call(ctx context.Context,
 	err := vql_subsystem.CheckAccess(scope, acls.MACHINE_STATE)
 	if err != nil {
 		scope.Log("getpid: %s", err)
-		return 0
+		return uint64(0)
 	}
 
-	return os.Getpid()
+	return uint64(os.Getpid())
 }
 
 func (self GetPidFunction) Info(scope vfilter.Scope, type_map *vfilter.TypeMap) *vfilter.FunctionInfo {

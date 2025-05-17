@@ -10,6 +10,7 @@ import (
 	kingpin "github.com/alecthomas/kingpin/v2"
 	"github.com/mitchellh/panicwrap"
 	"www.velocidex.com/golang/velociraptor/config"
+	logging "www.velocidex.com/golang/velociraptor/logging"
 )
 
 func writeLogOnPanic() error {
@@ -17,9 +18,11 @@ func writeLogOnPanic() error {
 	config_obj, err := new(config.Loader).
 		WithFileLoader(*config_path).
 		WithEmbedded(*embedded_config_path).
+		WithEnvLiteralLoader("VELOCIRAPTOR_LITERAL_CONFIG").
 		WithEnvLoader("VELOCIRAPTOR_CONFIG").
 		LoadAndValidate()
 	if err != nil {
+		logging.FlushPrelogs(config.GetDefaultConfig())
 		return fmt.Errorf("Unable to load config file: %w", err)
 	}
 

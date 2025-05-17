@@ -47,6 +47,9 @@ type: INTERNAL
 name: Server.Internal.Label
 type: INTERNAL
 `, `
+name: Server.Internal.UserManager
+type: INTERNAL
+`, `
 name: Server.Internal.Notifications
 type: INTERNAL
 `, `
@@ -150,9 +153,9 @@ func (self *TestSuite) CreateFlow(client_id, flow_id string) {
 }
 
 func (self *TestSuite) LoadConfig() *config_proto.Config {
-	os.Setenv("VELOCIRAPTOR_CONFIG", SERVER_CONFIG)
+	os.Setenv("VELOCIRAPTOR_LITERAL_CONFIG", SERVER_CONFIG)
 	config_obj, err := new(config.Loader).
-		WithEnvLiteralLoader("VELOCIRAPTOR_CONFIG").WithRequiredFrontend().
+		WithEnvLiteralLoader("VELOCIRAPTOR_LITERAL_CONFIG").WithRequiredFrontend().
 		WithWriteback().WithVerbose(true).
 		LoadAndValidate()
 	require.NoError(self.T(), err)

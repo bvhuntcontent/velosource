@@ -1,6 +1,6 @@
 /*
 Velociraptor - Dig Deeper
-Copyright (C) 2019-2024 Rapid7 Inc.
+Copyright (C) 2019-2025 Rapid7 Inc.
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as published
@@ -65,7 +65,7 @@ func GetDefaultConfig() *config_proto.Config {
 			MaxPoll:               60,
 
 			// By default restart the client if we are unable to
-			// contant the server within this long. (NOTE - even a
+			// contact the server within this long. (NOTE - even a
 			// failed connection will reset the counter, the nanny
 			// will only fire if the client has failed in some way -
 			// e.g. the communicator is stopped for some reason).

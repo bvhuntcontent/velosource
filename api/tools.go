@@ -1,7 +1,7 @@
 package api
 
 import (
-	context "golang.org/x/net/context"
+	"context"
 
 	"www.velocidex.com/golang/velociraptor/acls"
 	artifacts_proto "www.velocidex.com/golang/velociraptor/artifacts/proto"
@@ -10,6 +10,8 @@ import (
 
 func (self *ApiServer) GetToolInfo(ctx context.Context,
 	in *artifacts_proto.Tool) (*artifacts_proto.Tool, error) {
+
+	defer Instrument("GetToolInfo")()
 
 	users := services.GetUserManager()
 	user_record, org_config_obj, err := users.GetUserFromContext(ctx)
@@ -38,6 +40,8 @@ func (self *ApiServer) GetToolInfo(ctx context.Context,
 
 func (self *ApiServer) SetToolInfo(ctx context.Context,
 	in *artifacts_proto.Tool) (*artifacts_proto.Tool, error) {
+
+	defer Instrument("SetToolInfo")()
 
 	users := services.GetUserManager()
 	user_record, org_config_obj, err := users.GetUserFromContext(ctx)

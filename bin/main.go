@@ -1,6 +1,6 @@
 /*
 Velociraptor - Dig Deeper
-Copyright (C) 2019-2024 Rapid7 Inc.
+Copyright (C) 2019-2025 Rapid7 Inc.
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as published
@@ -182,6 +182,7 @@ func main() {
 		WithFileLoader(*config_path).
 		WithEmbedded(*embedded_config_path).
 		WithEnvLoader("VELOCIRAPTOR_CONFIG").
+		WithEnvLiteralLoader("VELOCIRAPTOR_LITERAL_CONFIG").
 		WithConfigMutator("Mutator mergeFlagConfig",
 			func(config_obj *config_proto.Config) error {
 				return mergeFlagConfig(config_obj, default_config)
@@ -246,6 +247,7 @@ func makeDefaultConfigLoader() *config.Loader {
 		WithFileLoader(*config_path).
 		WithEmbedded(*embedded_config_path).
 		WithEnvLoader("VELOCIRAPTOR_CONFIG").
+		WithEnvLiteralLoader("VELOCIRAPTOR_LITERAL_CONFIG").
 		WithConfigMutator("Mutator mergeFlagConfig",
 			func(config_obj *config_proto.Config) error {
 				return mergeFlagConfig(config_obj, default_config)

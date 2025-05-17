@@ -3,7 +3,7 @@
 
 /*
    Velociraptor - Dig Deeper
-   Copyright (C) 2019-2024 Rapid7 Inc.
+   Copyright (C) 2019-2025 Rapid7 Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -34,6 +34,7 @@ import (
 	kingpin "github.com/alecthomas/kingpin/v2"
 	errors "github.com/go-errors/errors"
 	"github.com/virtuald/go-paniclog"
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/debug"
 	"golang.org/x/sys/windows/svc/eventlog"
@@ -716,4 +717,11 @@ func init() {
 		kingpin.FatalIfError(err, "")
 		return true
 	})
+
+	// From now on all LoadLibrary() calls will be done from the
+	// system directories. This does not help any libraries linked
+	// into the binary because they would have loaded already but this
+	// helps to reduce our DLL hijacking surface especially with
+	// external libraries.
+	windows.SetDefaultDllDirectories(windows.LOAD_LIBRARY_SEARCH_SYSTEM32)
 }

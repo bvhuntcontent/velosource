@@ -20,7 +20,7 @@ import (
 	"www.velocidex.com/golang/vfilter"
 	"www.velocidex.com/golang/vfilter/types"
 
-	// For map[string]interface{} protocl
+	// For map[string]interface{} protocol
 	_ "www.velocidex.com/golang/velociraptor/vql/parsers"
 )
 
@@ -69,6 +69,38 @@ detection:
        - 2
 
   condition: selection
+`
+
+	simpleTemporalCorrelationRule = `
+title: Rule1
+id: r1
+logsource:
+  product: windows # Just for testing
+  service: security
+detection:
+    selection_parent:
+        ParentImage|endswith:
+            - '\tomcat8.exe'
+    condition: all of selection_*
+---
+title: Rule2
+id: r2
+logsource:
+  product: windows # Just for testing
+  service: security
+detection:
+    selection_method:
+        cs-method: 'POST'
+    condition: all of selection_*
+---
+title: Both rules
+correlation:
+  type: temporal
+  rules:
+    - r1
+    - r2
+  timespan: 10m
+level: high
 `
 
 	testRows = []*ordereddict.Dict{
@@ -563,6 +595,28 @@ detection:
 					Set("Proc", 1),
 			},
 		},
+		{
+			description: "Automatic Field Mappings",
+			rule: `
+title: Automatic Field Mappings
+logsource:
+  product: windows
+  service: application
+
+detection:
+   automaticField:
+      Foo.Bar.Baz|contains: Hello
+
+   condition: automaticField
+`,
+			fieldmappings: ordereddict.NewDict(),
+			rows: []*ordereddict.Dict{
+				ordereddict.NewDict().
+					Set("Foo", ordereddict.NewDict().
+						Set("Bar", ordereddict.NewDict().
+							Set("Baz", "Hello world"))),
+			},
+		},
 	}
 )
 
@@ -582,7 +636,7 @@ func (self *SigmaTestSuite) TestSigmaModifiers() {
 	plugin := SigmaPlugin{}
 
 	for _, test_case := range sigmaTestCases {
-		if false && test_case.description != "Test Conditions" {
+		if false && test_case.description != "Automatic Field Mappings" {
 			continue
 		}
 
@@ -610,6 +664,14 @@ func (self *SigmaTestSuite) TestSigmaModifiers() {
 		}
 
 		for row := range plugin.Call(ctx, scope, args) {
+			// Ensure the plugin reports the rule that matched and the
+			// match object
+			_, pres := scope.Associative(row, "_Rule")
+			assert.True(self.T(), pres)
+
+			_, pres = scope.Associative(row, "_Match")
+			assert.True(self.T(), pres)
+
 			rows = append(rows, row)
 		}
 
@@ -731,6 +793,10 @@ correlation:
     timespan: 5m
     condition:
         gte: 3
+
+# Make sure the details and enrichment comes from the correlation rule.
+details: Detected Multiple Failed Logins
+enrichment: x=>x._Correlations
 `,
 			fieldmappings: loginEvents_field_mappings,
 
@@ -872,6 +938,75 @@ level: high
 					Set("cs-method", "POST").
 					Set("cs-uri-query", "/app//json/setup-restore-local.action").
 					Set("sc-status", 200),
+			},
+		}, {
+			description: "Correlation Test TEMPORAL Partial match should not fire",
+			rule:        simpleTemporalCorrelationRule,
+			fieldmappings: ordereddict.NewDict().
+				Set("ParentImage", "x=>x.ParentImage").
+				Set("cs-method", "x=>x.`cs-method`"),
+			rows: []*ordereddict.Dict{
+				// Should trigger r1
+				ordereddict.NewDict().
+					Set("Timestamp", "2024-10-10T12:22:00+10").
+					Set("ParentImage", "C:\\Windows\\tomcat8.exe"),
+
+				// Should trigger r1
+				ordereddict.NewDict().
+					Set("Timestamp", "2024-10-10T12:23:00+10").
+					Set("ParentImage", "C:\\Windows\\tomcat8.exe"),
+
+				// Should trigger r1
+				ordereddict.NewDict().
+					Set("Timestamp", "2024-10-10T12:24:00+10").
+					Set("ParentImage", "C:\\Windows\\tomcat8.exe"),
+			},
+		},
+		{
+			description: "Correlation Test TEMPORAL Multiple match",
+			rule:        simpleTemporalCorrelationRule,
+			// The _Correlations result should show all 3 r1 matches
+			// and one r2 match
+			fieldmappings: ordereddict.NewDict().
+				Set("ParentImage", "x=>x.ParentImage").
+				Set("cs-method", "x=>x.`cs-method`"),
+			rows: []*ordereddict.Dict{
+				// Should trigger r1
+				ordereddict.NewDict().
+					Set("Timestamp", "2024-10-10T12:22:00+10").
+					Set("ParentImage", "C:\\Windows\\tomcat8.exe"),
+
+				// Should trigger r1
+				ordereddict.NewDict().
+					Set("Timestamp", "2024-10-10T12:23:00+10").
+					Set("ParentImage", "C:\\Windows\\tomcat8.exe"),
+
+				// Should trigger r1
+				ordereddict.NewDict().
+					Set("Timestamp", "2024-10-10T12:24:00+10").
+					Set("ParentImage", "C:\\Windows\\tomcat8.exe"),
+
+				// Should trigger r2
+				ordereddict.NewDict().
+					Set("Timestamp", "2024-10-10T12:25:00+10").
+					Set("cs-method", "POST"),
+			},
+		}, {
+			description: "Correlation Test TEMPORAL Expired match should not fire",
+			rule:        simpleTemporalCorrelationRule,
+			fieldmappings: ordereddict.NewDict().
+				Set("ParentImage", "x=>x.ParentImage").
+				Set("cs-method", "x=>x.`cs-method`"),
+			rows: []*ordereddict.Dict{
+				// Should trigger r1
+				ordereddict.NewDict().
+					Set("Timestamp", "2024-10-10T12:22:00+10").
+					Set("ParentImage", "C:\\Windows\\tomcat8.exe"),
+
+				// Should trigger r2 but more than 10 min later
+				ordereddict.NewDict().
+					Set("Timestamp", "2024-10-10T12:35:00+10").
+					Set("cs-method", "POST"),
 			},
 		},
 	}

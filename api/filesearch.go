@@ -2,13 +2,13 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"io"
 	"regexp"
 	"strings"
 
 	errors "github.com/go-errors/errors"
-	context "golang.org/x/net/context"
 	"www.velocidex.com/golang/velociraptor/acls"
 	api_proto "www.velocidex.com/golang/velociraptor/api/proto"
 	"www.velocidex.com/golang/velociraptor/file_store"
@@ -25,6 +25,8 @@ var (
 
 func (self *ApiServer) SearchFile(ctx context.Context,
 	in *api_proto.SearchFileRequest) (*api_proto.SearchFileResponse, error) {
+
+	defer Instrument("SearchFile")()
 
 	users := services.GetUserManager()
 	user_record, org_config_obj, err := users.GetUserFromContext(ctx)

@@ -5,24 +5,32 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
+	"time"
 
-	"github.com/Velocidex/ordereddict"
 	"github.com/go-errors/errors"
 	api_proto "www.velocidex.com/golang/velociraptor/api/proto"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
-	"www.velocidex.com/golang/velociraptor/constants"
 	crypto_proto "www.velocidex.com/golang/velociraptor/crypto/proto"
 	"www.velocidex.com/golang/velociraptor/datastore"
 	"www.velocidex.com/golang/velociraptor/file_store"
 	flows_proto "www.velocidex.com/golang/velociraptor/flows/proto"
 	"www.velocidex.com/golang/velociraptor/json"
+	"www.velocidex.com/golang/velociraptor/logging"
 	"www.velocidex.com/golang/velociraptor/paths"
 	"www.velocidex.com/golang/velociraptor/result_sets"
 	"www.velocidex.com/golang/velociraptor/services"
 	"www.velocidex.com/golang/velociraptor/utils"
 )
 
-type FlowStorageManager struct{}
+type FlowStorageManager struct {
+	mu sync.Mutex
+
+	indexBuilders map[string]*flowIndexBuilder
+
+	// Protects the global flows journal
+	flow_journal_mu sync.Mutex
+}
 
 func (self *FlowStorageManager) WriteFlow(
 	ctx context.Context,
@@ -47,25 +55,16 @@ func (self *FlowStorageManager) WriteFlowIndex(
 	config_obj *config_proto.Config,
 	flow *flows_proto.ArtifactCollectorContext) error {
 
-	if flow.Request == nil || flow.SessionId == "" {
-		return errors.New("Invalid flow")
-	}
+	return self.GetIndexBuilder(flow.ClientId).WriteFlowIndex(
+		ctx, config_obj, flow)
+}
 
-	client_path_manager := paths.NewClientPathManager(flow.ClientId)
-	journal, err := services.GetJournal(config_obj)
-	if err != nil {
-		return err
-	}
+func (self *FlowStorageManager) RemoveClientFlowsFromIndex(
+	ctx context.Context, config_obj *config_proto.Config,
+	client_id string, flows map[string]bool) error {
 
-	return journal.AppendToResultSet(config_obj, client_path_manager.FlowIndex(),
-		[]*ordereddict.Dict{ordereddict.NewDict().
-			Set("FlowId", flow.SessionId).
-			Set("Artifacts", flow.Request.Artifacts).
-			Set("Created", flow.CreateTime).
-			Set("Creator", flow.Request.Creator)},
-		services.JournalOptions{
-			Sync: true,
-		})
+	return self.GetIndexBuilder(client_id).
+		RemoveClientFlowsFromIndex(ctx, config_obj, self, flows)
 }
 
 func (self *FlowStorageManager) WriteTask(
@@ -100,16 +99,16 @@ func (self *FlowStorageManager) ListFlows(
 		client_path_manager.FlowIndex(), options)
 	if err != nil || rs_reader.TotalRows() <= 0 {
 		// Try to rebuild the index
-		err = self.buildFlowIndexFromLegacy(ctx, config_obj, client_id)
+		err = self.buildFlowIndexFromDatastore(ctx, config_obj, client_id)
 		if err != nil {
-			return nil, 0, fmt.Errorf("buildFlowIndexFromLegacy %w", err)
+			return nil, 0, fmt.Errorf("buildFlowIndexFromDatastore %w", err)
 		}
 
 		rs_reader, err = result_sets.NewResultSetReaderWithOptions(
 			ctx, config_obj, file_store_factory,
 			client_path_manager.FlowIndex(), options)
 		if err != nil {
-			return nil, 0, fmt.Errorf("NewResultSetReaderWithOptions %w", err)
+			return nil, 0, fmt.Errorf("ListFlows %w", err)
 		}
 	}
 
@@ -147,68 +146,70 @@ func (self *FlowStorageManager) ListFlows(
 	return result, rs_reader.TotalRows(), nil
 }
 
-// Rebuild the flow index from individual flow context files.
-func (self *FlowStorageManager) buildFlowIndexFromLegacy(
+// Rebuild flow indexes periodically as required.
+func (self *FlowStorageManager) houseKeeping(
+	ctx context.Context,
+	config_obj *config_proto.Config,
+	wg *sync.WaitGroup) {
+
+	defer wg.Done()
+
+	delay := time.Second * 60
+	if config_obj.Defaults != nil &&
+		config_obj.Defaults.ClientInfoHousekeepingPeriod > 0 {
+		delay = time.Duration(config_obj.Defaults.ClientInfoHousekeepingPeriod) * time.Second
+	}
+
+	logger := logging.GetLogger(config_obj, &logging.FrontendComponent)
+
+	for {
+		last_try := utils.GetTime().Now()
+
+		select {
+		case <-ctx.Done():
+			return
+
+		case <-utils.GetTime().After(utils.Jitter(delay)):
+			// Avoid retrying too quickly. This is mainly for
+			// tests where the time is mocked for the After(delay)
+			// above does not work.
+			if utils.GetTime().Now().Sub(last_try) < time.Second*10 {
+				utils.SleepWithCtx(ctx, time.Minute)
+				continue
+			}
+
+			logger.Debug("<green>FlowStorageManager</> housekeeping run")
+			err := self.RemoveFlowsFromJournal(ctx, config_obj)
+			if err != nil {
+				logger.Error("RemoveFlowsFromJournal: %v", err)
+			}
+		}
+	}
+}
+
+func (self *FlowStorageManager) GetIndexBuilder(client_id string) *flowIndexBuilder {
+	self.mu.Lock()
+	defer self.mu.Unlock()
+
+	builder, pres := self.indexBuilders[client_id]
+	if !pres {
+		builder = &flowIndexBuilder{
+			client_id: client_id,
+		}
+		self.indexBuilders[client_id] = builder
+	}
+
+	return builder
+}
+
+func (self *FlowStorageManager) buildFlowIndexFromDatastore(
 	ctx context.Context,
 	config_obj *config_proto.Config,
 	client_id string) error {
 
-	db, err := datastore.GetDB(config_obj)
-	if err != nil {
-		return err
-	}
-
-	flow_path_manager := paths.NewFlowPathManager(client_id, "")
-	all_flow_urns, err := db.ListChildren(
-		config_obj, flow_path_manager.ContainerPath())
-	if err != nil {
-		return err
-	}
-
-	seen := make(map[string]bool)
-
-	// We only care about the flow contexts
-	for _, urn := range all_flow_urns {
-		flow_id := urn.Base()
-		// Hide the monitoring flow since it is not a real flow.
-		if flow_id == constants.MONITORING_WELL_KNOWN_FLOW {
-			continue
-		}
-
-		seen[flow_id] = true
-	}
-
-	flow_reader := NewFlowReader(
-		ctx, config_obj, self, client_id)
-
-	go func() {
-		defer flow_reader.Close()
-
-		for k := range seen {
-			flow_reader.In <- k
-		}
-	}()
-
-	client_path_manager := paths.NewClientPathManager(client_id)
-	file_store_factory := file_store.GetFileStore(config_obj)
-
-	rs_writer, err := result_sets.NewResultSetWriter(file_store_factory,
-		client_path_manager.FlowIndex(),
-		json.DefaultEncOpts(), utils.SyncCompleter, result_sets.TruncateMode)
-	if err != nil {
-		return err
-	}
-	defer rs_writer.Close()
-
-	for flow := range flow_reader.Out {
-		rs_writer.Write(ordereddict.NewDict().
-			Set("FlowId", flow.SessionId).
-			Set("Artifacts", flow.Request.Artifacts).
-			Set("Created", flow.CreateTime).
-			Set("Creator", flow.Request.Creator))
-	}
-
-	return nil
+	// Do not hold the lock while we build different clients.
+	return self.GetIndexBuilder(client_id).
+		BuildFlowIndexFromDatastore(ctx, config_obj, self)
 }
 
 // Load the collector context from storage.
@@ -318,4 +319,18 @@ func (self *FlowStorageManager) GetFlowRequests(
 
 	result.Items = flow_details.Items[offset:end]
 	return result, nil
+}
+
+func NewFlowStorageManager(
+	ctx context.Context,
+	config_obj *config_proto.Config,
+	wg *sync.WaitGroup) *FlowStorageManager {
+	res := &FlowStorageManager{
+		indexBuilders: make(map[string]*flowIndexBuilder),
+	}
+
+	wg.Add(1)
+	go res.houseKeeping(ctx, config_obj, wg)
+
+	return res
 }

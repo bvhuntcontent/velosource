@@ -1,7 +1,8 @@
 package api
 
 import (
-	context "golang.org/x/net/context"
+	"context"
+
 	"www.velocidex.com/golang/velociraptor/acls"
 	api_proto "www.velocidex.com/golang/velociraptor/api/proto"
 	"www.velocidex.com/golang/velociraptor/api/tables"
@@ -14,6 +15,8 @@ import (
 func (self *ApiServer) GetClientFlows(
 	ctx context.Context,
 	in *api_proto.GetTableRequest) (*api_proto.GetTableResponse, error) {
+
+	defer Instrument("GetClientFlows")()
 
 	users := services.GetUserManager()
 	user_record, org_config_obj, err := users.GetUserFromContext(ctx)

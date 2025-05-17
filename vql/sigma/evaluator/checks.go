@@ -11,7 +11,8 @@ import (
 
 func (self *VQLRuleEvaluator) CheckRule() error {
 	// Rule has no condition - just and all the selections
-	if len(self.Detection.Conditions) == 0 {
+	if self.Correlation == nil &&
+		len(self.Detection.Conditions) == 0 {
 		fields := []string{}
 		for k := range self.Detection.Searches {
 			fields = append(fields, k)
@@ -43,6 +44,20 @@ func (self *VQLRuleEvaluator) CheckRule() error {
 						lambda_str, err)
 				}
 				self.lambda = lambda
+			}
+		}
+
+		enrichment_any, pres := self.AdditionalFields["enrichment"]
+		if pres {
+			enrichment_str, ok := enrichment_any.(string)
+			if ok {
+				enrichment, err := vfilter.ParseLambda(enrichment_str)
+				if err != nil {
+					return fmt.Errorf(
+						"Rule provides invalid enrichment: %v, Error: %v",
+						enrichment_str, err)
+				}
+				self.enrichment = enrichment
 			}
 		}
 

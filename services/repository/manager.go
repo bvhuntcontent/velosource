@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Velocidex/ordereddict"
+	"github.com/Velocidex/yaml/v2"
 	"www.velocidex.com/golang/velociraptor/artifacts/assets"
 	artifacts_proto "www.velocidex.com/golang/velociraptor/artifacts/proto"
 	config_proto "www.velocidex.com/golang/velociraptor/config/proto"
@@ -41,6 +42,13 @@ func (self *RepositoryManager) NewRepository() services.Repository {
 func (self *RepositoryManager) StartWatchingForUpdates(
 	ctx context.Context, wg *sync.WaitGroup,
 	config_obj *config_proto.Config) error {
+
+	// Are we running on the client? we dont need to sync local
+	// repository managers.
+	if config_obj.Services != nil &&
+		config_obj.Services.ClientEventTable {
+		return nil
+	}
 
 	journal, err := services.GetJournal(config_obj)
 	if err != nil {
@@ -394,9 +402,15 @@ func LoadArtifactsFromConfig(
 	// Load some artifacts via the autoexec mechanism.
 	if config_obj.Autoexec != nil {
 		for _, def := range config_obj.Autoexec.ArtifactDefinitions {
+			// These artifacts do not actually have a raw section so
+			// create one for them.
+			serialize, err := yaml.Marshal(def)
+			if err == nil {
+				def.Raw = string(serialize)
+			}
 
 			// Artifacts loaded from the config file are considered built in.
-			_, err := global_repository.LoadProto(def, options)
+			_, err = global_repository.LoadProto(def, options)
 			if err != nil {
 				return err
 			}
